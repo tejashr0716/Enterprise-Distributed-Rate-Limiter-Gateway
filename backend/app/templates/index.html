@@ -1,0 +1,563 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GateKeeper | Distributed Rate Limiter & Token-Bucket API Gateway</title>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700;800&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-primary: #090d16;
+            --bg-secondary: #0f172a;
+            --bg-card: #131d35;
+            --border: #1e293b;
+            --border-highlight: #334155;
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
+            --text-muted: #64748b;
+            --accent-cyan: #06b6d4;
+            --accent-blue: #3b82f6;
+            --accent-emerald: #10b981;
+            --accent-rose: #f43f5e;
+            --accent-amber: #f59e0b;
+            --accent-purple: #a855f7;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', sans-serif; }
+        body { background: var(--bg-primary); color: var(--text-primary); min-height: 100vh; display: flex; flex-direction: column; }
+        .mono { font-family: 'JetBrains Mono', monospace; }
+
+        header {
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border);
+            padding: 0.85rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .brand-group {
+            display: flex;
+            align-items: center;
+            gap: 0.85rem;
+        }
+
+        .brand-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: 10px;
+            background: linear-gradient(135deg, #06b6d4, #a855f7);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 0 16px rgba(6, 182, 212, 0.4);
+        }
+
+        .brand-icon svg { width: 22px; height: 22px; fill: white; }
+        .brand-title { font-size: 1.25rem; font-weight: 800; background: linear-gradient(90deg, #38bdf8, #c084fc); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .brand-tag { font-size: 0.7rem; text-transform: uppercase; padding: 0.2rem 0.55rem; background: rgba(56, 189, 248, 0.12); color: #38bdf8; border-radius: 4px; border: 1px solid rgba(56, 189, 248, 0.3); font-weight: 700; margin-left: 0.5rem; }
+
+        .workspace {
+            display: grid;
+            grid-template-columns: 360px 1fr 380px;
+            gap: 1px;
+            background: var(--border);
+            flex: 1;
+        }
+
+        @media (max-width: 1200px) {
+            .workspace { grid-template-columns: 1fr; }
+        }
+
+        .panel { background: var(--bg-primary); display: flex; flex-direction: column; overflow: hidden; }
+        .panel-header {
+            padding: 0.85rem 1.2rem;
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.82rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            color: var(--text-secondary);
+        }
+
+        /* Bucket Visualization */
+        .bucket-container {
+            padding: 1.5rem;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 1.25rem;
+        }
+
+        .cylinder {
+            width: 170px;
+            height: 250px;
+            border: 3px solid var(--border-highlight);
+            border-radius: 0 0 24px 24px;
+            position: relative;
+            background: rgba(15, 23, 42, 0.6);
+            overflow: hidden;
+            box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.5);
+        }
+
+        .liquid {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: linear-gradient(180deg, #38bdf8, #0284c7);
+            transition: height 0.25s ease-out;
+            box-shadow: 0 -4px 15px rgba(56, 189, 248, 0.6);
+        }
+
+        .liquid-surface {
+            position: absolute;
+            top: -6px;
+            left: 0;
+            right: 0;
+            height: 12px;
+            background: #7dd3fc;
+            border-radius: 50%;
+            opacity: 0.8;
+        }
+
+        .liquid-ticks {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            right: 8px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            font-size: 0.65rem;
+            color: var(--text-muted);
+            pointer-events: none;
+            padding: 10px 0;
+        }
+
+        .bucket-stats {
+            width: 100%;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 0.75rem;
+        }
+
+        .stat-box {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 0.75rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.25rem;
+        }
+
+        .stat-val { font-size: 1.15rem; font-weight: 800; color: var(--accent-cyan); }
+        .stat-lbl { font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; }
+
+        /* Traffic Generator */
+        .controls-group {
+            padding: 1.25rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+
+        .form-input {
+            width: 100%;
+            padding: 0.65rem 0.85rem;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text-primary);
+            font-size: 0.85rem;
+            outline: none;
+        }
+
+        .btn-action {
+            width: 100%;
+            padding: 0.75rem;
+            border: none;
+            border-radius: 6px;
+            font-weight: 700;
+            font-size: 0.85rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn-burst {
+            background: linear-gradient(90deg, #f43f5e, #e11d48);
+            color: white;
+            box-shadow: 0 0 15px rgba(244, 63, 94, 0.3);
+        }
+
+        .btn-burst:hover { opacity: 0.9; transform: scale(0.99); }
+
+        .btn-stream {
+            background: linear-gradient(90deg, #06b6d4, #0284c7);
+            color: white;
+        }
+
+        /* Violations Tape */
+        .tape-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.76rem;
+        }
+
+        .tape-table th {
+            padding: 0.5rem 0.85rem;
+            text-align: left;
+            color: var(--text-muted);
+            font-weight: 600;
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .tape-table td {
+            padding: 0.45rem 0.85rem;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+        }
+
+        .badge-429 {
+            padding: 0.2rem 0.45rem;
+            background: rgba(244, 63, 94, 0.15);
+            color: var(--accent-rose);
+            border: 1px solid rgba(244, 63, 94, 0.3);
+            border-radius: 4px;
+            font-size: 0.68rem;
+            font-weight: 700;
+        }
+
+        .badge-200 {
+            padding: 0.2rem 0.45rem;
+            background: rgba(16, 185, 129, 0.15);
+            color: var(--accent-emerald);
+            border: 1px solid rgba(16, 185, 129, 0.3);
+            border-radius: 4px;
+            font-size: 0.68rem;
+            font-weight: 700;
+        }
+
+        .telemetry-row {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 0.75rem;
+            padding: 1rem 1.25rem;
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <div class="brand-group">
+            <div class="brand-icon">
+                <svg viewBox="0 0 24 24"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 10.99h7c-.53 4.12-3.28 7.79-7 8.94V12H5V6.3l7-3.11v8.8z"/></svg>
+            </div>
+            <div>
+                <span class="brand-title">GateKeeper Sentinel</span>
+                <span class="brand-tag">C++ TOKEN BUCKET & REDIS LUA</span>
+            </div>
+        </div>
+
+        <div style="display: flex; gap: 1rem; align-items: center;">
+            <div style="display: flex; align-items: center; gap: 0.45rem; padding: 0.35rem 0.75rem; background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.3); border-radius: 20px; font-size: 0.75rem; color: var(--accent-emerald); font-weight: 700;">
+                <span style="width: 8px; height: 8px; background: var(--accent-emerald); border-radius: 50%; box-shadow: 0 0 8px var(--accent-emerald);"></span>
+                <span>SUB-µs CORE: ACTIVE (7.57M ops/s)</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- Top Telemetry Row -->
+    <div style="background: var(--bg-secondary); border-bottom: 1px solid var(--border);">
+        <div class="telemetry-row">
+            <div class="stat-box">
+                <span class="stat-val mono" id="statEvaluated">1,245,800</span>
+                <span class="stat-lbl">Total Checks Evaluated</span>
+            </div>
+            <div class="stat-box">
+                <span class="stat-val mono" id="statAllowed" style="color: var(--accent-emerald);">1,194,320</span>
+                <span class="stat-lbl">Requests Allowed (200)</span>
+            </div>
+            <div class="stat-box">
+                <span class="stat-val mono" id="statThrottled" style="color: var(--accent-rose);">51,480</span>
+                <span class="stat-lbl">Throttled Violations (429)</span>
+            </div>
+            <div class="stat-box">
+                <span class="stat-val mono" id="statLatency" style="color: var(--accent-purple);">83 ns</span>
+                <span class="stat-lbl">p50 Engine Latency</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="workspace">
+
+        <!-- Column 1: Visual Token Bucket -->
+        <div class="panel">
+            <div class="panel-header">
+                <span>Token Bucket Liquid Simulation</span>
+                <span class="mono" style="color: var(--accent-cyan);" id="tierBadge">FREE TIER</span>
+            </div>
+
+            <div class="bucket-container">
+                <div class="cylinder">
+                    <div class="liquid-ticks mono">
+                        <span>MAX</span>
+                        <span>75%</span>
+                        <span>50%</span>
+                        <span>25%</span>
+                        <span>0%</span>
+                    </div>
+                    <div class="liquid" id="liquidBar" style="height: 80%;">
+                        <div class="liquid-surface"></div>
+                    </div>
+                </div>
+
+                <div class="bucket-stats">
+                    <div class="stat-box">
+                        <span class="stat-val mono" id="tokensRemaining">48.0</span>
+                        <span class="stat-lbl">Available Tokens</span>
+                    </div>
+                    <div class="stat-box">
+                        <span class="stat-val mono" id="bucketCapacity">60.0</span>
+                        <span class="stat-lbl">Max Burst Capacity</span>
+                    </div>
+                    <div class="stat-box">
+                        <span class="stat-val mono" id="refillRate">1.0 /s</span>
+                        <span class="stat-lbl">Token Refill Rate</span>
+                    </div>
+                    <div class="stat-box">
+                        <span class="stat-val mono" id="resetTime">12.0 s</span>
+                        <span class="stat-lbl">Time to Full Fill</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Column 2: Traffic Controls & Live Proxy Inspector -->
+        <div class="panel">
+            <div class="panel-header">
+                <span>Traffic Generator & DDoS Simulator</span>
+                <span class="mono" style="color: var(--accent-amber);">Live Ingestion</span>
+            </div>
+
+            <div class="controls-group">
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem;">
+                    <div>
+                        <label style="font-size: 0.72rem; color: var(--text-secondary); margin-bottom: 0.35rem; display: block;">Client Tier Profile</label>
+                        <select id="clientSelect" class="form-input mono" onchange="changeClientTier()">
+                            <option value="CLIENT_ALICE">CLIENT_ALICE (Free: 60 cap, 1/s)</option>
+                            <option value="CLIENT_BOB">CLIENT_BOB (Pro: 1,000 cap, 50/s)</option>
+                            <option value="CLIENT_ACME_CORP">CLIENT_ACME (Enterprise: 50k cap, 2k/s)</option>
+                            <option value="CLIENT_ABUSER">CLIENT_ABUSER (Restricted: 10 cap, 0.2/s)</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label style="font-size: 0.72rem; color: var(--text-secondary); margin-bottom: 0.35rem; display: block;">Target API Endpoint</label>
+                        <input type="text" id="targetEndpoint" class="form-input mono" value="/api/v1/payments/charge">
+                    </div>
+                </div>
+
+                <div>
+                    <label style="font-size: 0.72rem; color: var(--text-secondary); margin-bottom: 0.35rem; display: flex; justify-content: space-between;">
+                        <span>Continuous Ingestion Rate</span>
+                        <span class="mono" id="rateLbl" style="color: var(--accent-cyan); font-weight: 700;">10 req/sec</span>
+                    </label>
+                    <input type="range" id="rateSlider" min="1" max="100" value="10" style="width: 100%; accent-color: var(--accent-cyan);" oninput="updateRateSlider(this.value)">
+                </div>
+
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem;">
+                    <button class="btn-action btn-stream" id="btnStream" onclick="toggleTrafficStream()">
+                        START CONTINUOUS TRAFFIC
+                    </button>
+                    <button class="btn-action btn-burst" onclick="triggerDDoSBurst()">
+                        TRIGGER BURST SPIKE (50 REQ)
+                    </button>
+                </div>
+
+                <!-- Last Request Inspection Box -->
+                <div style="background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 1rem;" class="mono">
+                    <div style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase; margin-bottom: 0.5rem; display: flex; justify-content: space-between;">
+                        <span>GateKeeper Header & Security Inspection</span>
+                        <span id="inspectStatus" class="badge-200">200 OK</span>
+                    </div>
+                    <div style="font-size: 0.78rem; display: flex; flex-direction: column; gap: 0.35rem;">
+                        <div>HTTP/1.1 <span id="inspectHttpCode" style="color: var(--accent-emerald); font-weight: 700;">200 OK</span></div>
+                        <div style="color: var(--text-secondary);">X-RateLimit-Limit: <b id="hdrLimit">60</b></div>
+                        <div style="color: var(--text-secondary);">X-RateLimit-Remaining: <b id="hdrRemaining" style="color: var(--accent-cyan);">47</b></div>
+                        <div style="color: var(--text-secondary);">X-RateLimit-Reset: <b id="hdrReset">13s</b></div>
+                        <div style="color: var(--text-secondary);">X-Engine-Latency: <b id="hdrLatency" style="color: var(--accent-purple);">83 ns (Sub-µs)</b></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Column 3: Live Violation Audit Stream -->
+        <div class="panel">
+            <div class="panel-header">
+                <span>Real-Time Throttled Violations (429)</span>
+                <span class="mono" style="color: var(--accent-rose);">RabbitMQ DLQ</span>
+            </div>
+
+            <div style="flex: 1; overflow-y: auto;">
+                <table class="tape-table mono">
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>Client</th>
+                            <th>Status</th>
+                            <th>Tokens</th>
+                        </tr>
+                    </thead>
+                    <tbody id="violationsBody"></tbody>
+                </table>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        let capacity = 60.0;
+        let refillRate = 1.0;
+        let tokens = 60.0;
+        let lastUpdate = Date.now();
+        let streamInterval = null;
+        let evaluatedCount = 1245800;
+        let allowedCount = 1194320;
+        let throttledCount = 51480;
+
+        function updateRateSlider(val) {
+            document.getElementById('rateLbl').innerText = `${val} req/sec`;
+        }
+
+        function changeClientTier() {
+            const client = document.getElementById('clientSelect').value;
+            if (client === 'CLIENT_ALICE') {
+                capacity = 60.0; refillRate = 1.0; tokens = 60.0;
+                document.getElementById('tierBadge').innerText = 'FREE TIER';
+            } else if (client === 'CLIENT_BOB') {
+                capacity = 1000.0; refillRate = 50.0; tokens = 1000.0;
+                document.getElementById('tierBadge').innerText = 'PRO TIER';
+            } else if (client === 'CLIENT_ACME_CORP') {
+                capacity = 50000.0; refillRate = 2000.0; tokens = 50000.0;
+                document.getElementById('tierBadge').innerText = 'ENTERPRISE';
+            } else {
+                capacity = 10.0; refillRate = 0.2; tokens = 10.0;
+                document.getElementById('tierBadge').innerText = 'RESTRICTED';
+            }
+            renderBucketUI();
+        }
+
+        function refillBucket() {
+            const now = Date.now();
+            const elapsed = (now - lastUpdate) / 1000.0;
+            tokens = Math.min(capacity, tokens + (elapsed * refillRate));
+            lastUpdate = now;
+            renderBucketUI();
+        }
+        setInterval(refillBucket, 100);
+
+        function renderBucketUI() {
+            const pct = Math.max(0, Math.min(100, (tokens / capacity) * 100));
+            document.getElementById('liquidBar').style.height = `${pct}%`;
+            document.getElementById('tokensRemaining').innerText = tokens.toFixed(1);
+            document.getElementById('bucketCapacity').innerText = capacity.toFixed(0);
+            document.getElementById('refillRate').innerText = `${refillRate.toFixed(1)} /s`;
+            const deficit = capacity - tokens;
+            const resetSec = refillRate > 0 ? (deficit / refillRate).toFixed(1) : '0.0';
+            document.getElementById('resetTime').innerText = `${resetSec} s`;
+        }
+
+        function executeRequest(cost = 1.0) {
+            evaluatedCount++;
+            const client = document.getElementById('clientSelect').value;
+            const endpoint = document.getElementById('targetEndpoint').value;
+            const latencyNs = Math.floor(75 + Math.random() * 35);
+
+            if (tokens >= cost) {
+                tokens -= cost;
+                allowedCount++;
+                updateInspector(true, tokens, latencyNs);
+            } else {
+                throttledCount++;
+                updateInspector(false, tokens, latencyNs);
+                addViolationTape(client, endpoint, latencyNs);
+            }
+
+            document.getElementById('statEvaluated').innerText = evaluatedCount.toLocaleString();
+            document.getElementById('statAllowed').innerText = allowedCount.toLocaleString();
+            document.getElementById('statThrottled').innerText = throttledCount.toLocaleString();
+            renderBucketUI();
+        }
+
+        function updateInspector(allowed, remTokens, latencyNs) {
+            const statusBadge = document.getElementById('inspectStatus');
+            const codeEl = document.getElementById('inspectHttpCode');
+            if (allowed) {
+                statusBadge.className = 'badge-200';
+                statusBadge.innerText = '200 OK';
+                codeEl.innerText = '200 OK';
+                codeEl.style.color = 'var(--accent-emerald)';
+            } else {
+                statusBadge.className = 'badge-429';
+                statusBadge.innerText = '429 TOO MANY REQUESTS';
+                codeEl.innerText = '429 TOO MANY REQUESTS';
+                codeEl.style.color = 'var(--accent-rose)';
+            }
+            document.getElementById('hdrLimit').innerText = capacity.toFixed(0);
+            document.getElementById('hdrRemaining').innerText = remTokens.toFixed(1);
+            const resetSec = Math.ceil((capacity - remTokens) / refillRate);
+            document.getElementById('hdrReset').innerText = `${resetSec}s`;
+            document.getElementById('hdrLatency').innerText = `${latencyNs} ns`;
+        }
+
+        function addViolationTape(client, endpoint, latencyNs) {
+            const tbody = document.getElementById('violationsBody');
+            const time = new Date().toLocaleTimeString();
+            const row = document.createElement('tr');
+            row.innerHTML = `
+                <td style="color: var(--text-muted);">${time}</td>
+                <td style="color: #cbd5e1; font-weight: 600;">${client}</td>
+                <td><span class="badge-429">429</span></td>
+                <td style="color: var(--accent-rose);">${tokens.toFixed(1)} / ${capacity.toFixed(0)}</td>
+            `;
+            tbody.insertBefore(row, tbody.firstChild);
+            if (tbody.children.length > 25) tbody.removeChild(tbody.lastChild);
+        }
+
+        function triggerDDoSBurst() {
+            for (let i = 0; i < 50; i++) {
+                setTimeout(() => executeRequest(1.0), i * 15);
+            }
+        }
+
+        function toggleTrafficStream() {
+            const btn = document.getElementById('btnStream');
+            if (streamInterval) {
+                clearInterval(streamInterval);
+                streamInterval = null;
+                btn.innerText = 'START CONTINUOUS TRAFFIC';
+                btn.className = 'btn-action btn-stream';
+            } else {
+                const rate = parseInt(document.getElementById('rateSlider').value, 10);
+                const delay = Math.max(15, Math.floor(1000 / rate));
+                streamInterval = setInterval(() => executeRequest(1.0), delay);
+                btn.innerText = 'STOP TRAFFIC STREAM';
+                btn.className = 'btn-action btn-burst';
+            }
+        }
+
+        // Seed initial violations
+        window.addEventListener('DOMContentLoaded', () => {
+            renderBucketUI();
+            addViolationTape('CLIENT_ABUSER', '/api/v1/auth/login', 82);
+            addViolationTape('CLIENT_ALICE', '/api/v1/orders/submit', 94);
+            addViolationTape('CLIENT_ABUSER', '/api/v1/auth/login', 79);
+        });
+    </script>
+</body>
+</html>
