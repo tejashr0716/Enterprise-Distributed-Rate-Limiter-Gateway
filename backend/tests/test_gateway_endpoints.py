@@ -62,3 +62,27 @@ async def test_policy_crud_endpoint():
         data = post_res.json()
         assert data["client_id"] == "CLIENT_VIP"
         assert data["capacity"] == 500.0
+
+@pytest.mark.asyncio
+async def test_serve_dashboard_endpoint():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        res = await ac.get("/")
+        assert res.status_code == 200
+        assert "text/html" in res.headers.get("content-type", "")
+        assert "GateKeeper Sentinel" in res.text
+        assert "TELEMETRY WS" in res.text
+
+@pytest.mark.asyncio
+async def test_telemetry_summary_and_violations_endpoint():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        res_sum = await ac.get("/api/v1/telemetry/summary")
+        assert res_sum.status_code == 200
+        data_sum = res_sum.json()
+        assert "cpp_engine" in data_sum
+
+        res_viol = await ac.get("/api/v1/telemetry/violations?limit=5")
+        assert res_viol.status_code == 200
+        data_viol = res_viol.json()
+        assert "violations" in data_viol

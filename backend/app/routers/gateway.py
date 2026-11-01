@@ -66,6 +66,23 @@ async def check_rate_limit(req: RateLimitCheckRequest):
         latency_ns=result["latency_ns"]
     )
 
+    try:
+        from .telemetry import telemetry_ws_manager
+        await telemetry_ws_manager.broadcast({
+            "type": "CHECK",
+            "client_id": req.client_id,
+            "endpoint": req.endpoint,
+            "allowed": allowed,
+            "remaining_tokens": rem_tokens,
+            "capacity": capacity,
+            "refill_rate": refill_rate,
+            "reset_after_ms": reset_ms,
+            "latency_ns": result["latency_ns"],
+            "timestamp": datetime.utcnow().isoformat()
+        })
+    except Exception:
+        pass
+
     return RateLimitCheckResponse(
         allowed=allowed,
         client_id=req.client_id,

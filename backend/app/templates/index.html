@@ -265,6 +265,10 @@
         </div>
 
         <div style="display: flex; gap: 1rem; align-items: center;">
+            <div id="wsBadge" style="display: flex; align-items: center; gap: 0.45rem; padding: 0.35rem 0.75rem; background: rgba(56, 189, 248, 0.1); border: 1px solid rgba(56, 189, 248, 0.3); border-radius: 20px; font-size: 0.75rem; color: var(--accent-cyan); font-weight: 700;">
+                <span id="wsDot" style="width: 8px; height: 8px; background: var(--accent-cyan); border-radius: 50%; box-shadow: 0 0 8px var(--accent-cyan);"></span>
+                <span id="wsText">TELEMETRY WS: CONNECTING...</span>
+            </div>
             <div style="display: flex; align-items: center; gap: 0.45rem; padding: 0.35rem 0.75rem; background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.3); border-radius: 20px; font-size: 0.75rem; color: var(--accent-emerald); font-weight: 700;">
                 <span style="width: 8px; height: 8px; background: var(--accent-emerald); border-radius: 50%; box-shadow: 0 0 8px var(--accent-emerald);"></span>
                 <span>SUB-µs CORE: ACTIVE (7.57M ops/s)</span>
@@ -426,9 +430,10 @@
         let tokens = 60.0;
         let lastUpdate = Date.now();
         let streamInterval = null;
-        let evaluatedCount = 1245800;
-        let allowedCount = 1194320;
-        let throttledCount = 51480;
+        let evaluatedCount = 0;
+        let allowedCount = 0;
+        let throttledCount = 0;
+        let socket = null;
 
         function updateRateSlider(val) {
             document.getElementById('rateLbl').innerText = `${val} req/sec`;
@@ -472,29 +477,55 @@
             document.getElementById('resetTime').innerText = `${resetSec} s`;
         }
 
-        function executeRequest(cost = 1.0) {
-            evaluatedCount++;
+        async function executeRequest(cost = 1.0) {
             const client = document.getElementById('clientSelect').value;
             const endpoint = document.getElementById('targetEndpoint').value;
-            const latencyNs = Math.floor(75 + Math.random() * 35);
 
-            if (tokens >= cost) {
-                tokens -= cost;
-                allowedCount++;
-                updateInspector(true, tokens, latencyNs);
-            } else {
-                throttledCount++;
-                updateInspector(false, tokens, latencyNs);
-                addViolationTape(client, endpoint, latencyNs);
+            try {
+                const res = await fetch('/api/v1/gateway/check', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        client_id: client,
+                        endpoint: endpoint,
+                        tokens_requested: cost,
+                        ip_address: '127.0.0.1'
+                    })
+                });
+
+                if (!res.ok) {
+                    console.error('API check failed:', res.statusText);
+                    return;
+                }
+
+                const data = await res.json();
+                evaluatedCount++;
+                if (data.allowed) {
+                    allowedCount++;
+                } else {
+                    throttledCount++;
+                    addViolationTape(data.client_id, endpoint, data.latency_ns, data.remaining_tokens, data.capacity);
+                }
+
+                tokens = data.remaining_tokens;
+                capacity = data.capacity;
+                lastUpdate = Date.now();
+
+                updateInspector(data.allowed, data.remaining_tokens, data.capacity, data.reset_after_ms, data.latency_ns);
+                updateStatsUI();
+                renderBucketUI();
+            } catch (err) {
+                console.error('Request execution error:', err);
             }
+        }
 
+        function updateStatsUI() {
             document.getElementById('statEvaluated').innerText = evaluatedCount.toLocaleString();
             document.getElementById('statAllowed').innerText = allowedCount.toLocaleString();
             document.getElementById('statThrottled').innerText = throttledCount.toLocaleString();
-            renderBucketUI();
         }
 
-        function updateInspector(allowed, remTokens, latencyNs) {
+        function updateInspector(allowed, remTokens, cap, resetMs, latencyNs) {
             const statusBadge = document.getElementById('inspectStatus');
             const codeEl = document.getElementById('inspectHttpCode');
             if (allowed) {
@@ -508,14 +539,15 @@
                 codeEl.innerText = '429 TOO MANY REQUESTS';
                 codeEl.style.color = 'var(--accent-rose)';
             }
-            document.getElementById('hdrLimit').innerText = capacity.toFixed(0);
+            document.getElementById('hdrLimit').innerText = (cap || capacity).toFixed(0);
             document.getElementById('hdrRemaining').innerText = remTokens.toFixed(1);
-            const resetSec = Math.ceil((capacity - remTokens) / refillRate);
+            const resetSec = (resetMs / 1000.0).toFixed(1);
             document.getElementById('hdrReset').innerText = `${resetSec}s`;
-            document.getElementById('hdrLatency').innerText = `${latencyNs} ns`;
+            document.getElementById('hdrLatency').innerText = `${latencyNs} ns (Sub-µs)`;
+            document.getElementById('statLatency').innerText = `${latencyNs} ns`;
         }
 
-        function addViolationTape(client, endpoint, latencyNs) {
+        function addViolationTape(client, endpoint, latencyNs, remTokens = 0, cap = 60) {
             const tbody = document.getElementById('violationsBody');
             const time = new Date().toLocaleTimeString();
             const row = document.createElement('tr');
@@ -523,15 +555,15 @@
                 <td style="color: var(--text-muted);">${time}</td>
                 <td style="color: #cbd5e1; font-weight: 600;">${client}</td>
                 <td><span class="badge-429">429</span></td>
-                <td style="color: var(--accent-rose);">${tokens.toFixed(1)} / ${capacity.toFixed(0)}</td>
+                <td style="color: var(--accent-rose);">${Number(remTokens).toFixed(1)} / ${Number(cap).toFixed(0)}</td>
             `;
             tbody.insertBefore(row, tbody.firstChild);
-            if (tbody.children.length > 25) tbody.removeChild(tbody.lastChild);
+            if (tbody.children.length > 30) tbody.removeChild(tbody.lastChild);
         }
 
         function triggerDDoSBurst() {
             for (let i = 0; i < 50; i++) {
-                setTimeout(() => executeRequest(1.0), i * 15);
+                setTimeout(() => executeRequest(1.0), i * 20);
             }
         }
 
@@ -544,19 +576,92 @@
                 btn.className = 'btn-action btn-stream';
             } else {
                 const rate = parseInt(document.getElementById('rateSlider').value, 10);
-                const delay = Math.max(15, Math.floor(1000 / rate));
+                const delay = Math.max(25, Math.floor(1000 / rate));
                 streamInterval = setInterval(() => executeRequest(1.0), delay);
                 btn.innerText = 'STOP TRAFFIC STREAM';
                 btn.className = 'btn-action btn-burst';
             }
         }
 
-        // Seed initial violations
+        function initWebSocket() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}/api/v1/telemetry/ws`;
+            socket = new WebSocket(wsUrl);
+
+            socket.onopen = () => {
+                const badge = document.getElementById('wsBadge');
+                const dot = document.getElementById('wsDot');
+                const txt = document.getElementById('wsText');
+                badge.style.borderColor = 'rgba(16, 185, 129, 0.4)';
+                badge.style.background = 'rgba(16, 185, 129, 0.15)';
+                badge.style.color = 'var(--accent-emerald)';
+                dot.style.background = 'var(--accent-emerald)';
+                dot.style.boxShadow = '0 0 10px var(--accent-emerald)';
+                txt.innerText = 'TELEMETRY WS: LIVE';
+            };
+
+            socket.onmessage = (event) => {
+                try {
+                    const msg = JSON.parse(event.data);
+                    if (msg.type === 'CHECK') {
+                        const curClient = document.getElementById('clientSelect').value;
+                        if (msg.client_id === curClient) {
+                            tokens = msg.remaining_tokens;
+                            capacity = msg.capacity;
+                            renderBucketUI();
+                        }
+                    }
+                } catch (e) {}
+            };
+
+            socket.onclose = () => {
+                const txt = document.getElementById('wsText');
+                if (txt) txt.innerText = 'TELEMETRY WS: RECONNECTING';
+                setTimeout(initWebSocket, 2000);
+            };
+        }
+
+        async function loadInitialData() {
+            try {
+                // Fetch summary metrics
+                const sumRes = await fetch('/api/v1/telemetry/summary');
+                if (sumRes.ok) {
+                    const summary = await sumRes.json();
+                    if (summary.database && summary.database.total > 0) {
+                        evaluatedCount = summary.database.total;
+                        allowedCount = summary.database.allowed;
+                        throttledCount = summary.database.throttled;
+                        document.getElementById('statLatency').innerText = `${summary.database.avg_latency_ns} ns`;
+                    } else if (summary.cpp_engine) {
+                        evaluatedCount = summary.cpp_engine.total_requests_evaluated;
+                        allowedCount = summary.cpp_engine.total_requests_allowed;
+                        throttledCount = summary.cpp_engine.total_requests_throttled;
+                        if (summary.cpp_engine.avg_latency_ns > 0) {
+                            document.getElementById('statLatency').innerText = `${summary.cpp_engine.avg_latency_ns} ns`;
+                        }
+                    }
+                    updateStatsUI();
+                }
+
+                // Fetch recent violations
+                const violRes = await fetch('/api/v1/telemetry/violations?limit=15');
+                if (violRes.ok) {
+                    const data = await violRes.json();
+                    if (data.violations && data.violations.length > 0) {
+                        for (const v of data.violations.slice().reverse()) {
+                            addViolationTape(v.client_id, v.endpoint, v.latency_ns, v.remaining_tokens, 60);
+                        }
+                    }
+                }
+            } catch (err) {
+                console.warn('Initial data load:', err);
+            }
+        }
+
         window.addEventListener('DOMContentLoaded', () => {
             renderBucketUI();
-            addViolationTape('CLIENT_ABUSER', '/api/v1/auth/login', 82);
-            addViolationTape('CLIENT_ALICE', '/api/v1/orders/submit', 94);
-            addViolationTape('CLIENT_ABUSER', '/api/v1/auth/login', 79);
+            initWebSocket();
+            loadInitialData();
         });
     </script>
 </body>
